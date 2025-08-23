@@ -62,6 +62,10 @@ def serve(path):
         if os.path.exists(index_path):
             return send_from_directory(static_folder_path, 'index.html')
         return "index.html not found", 404
+        @app.route("/api/health", methods=["GET"])
+def health():
+    return {"status": "healthy"}, 200
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
