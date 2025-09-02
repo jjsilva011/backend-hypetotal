@@ -1,57 +1,61 @@
+# api/views.py
 import random
 import string
+
+from django.conf import settings
 from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from .models import Product
 from .serializers import ProductSerializer
 
 
-@api_view(["GET"])
-@permission_classes([AllowAny])
-def health(_request):
-    return Response({"service": "Hype Total Backend", "status": "healthy"})
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "per_page"
+    max_page_size = 100
 
 
 class ProductViewSet(viewsets.ModelViewSet):
-    """
-    /api/products/    -> GET (lista), POST (cria)
-    /api/products/{id}/ -> GET/PUT/PATCH/DELETE
-    /api/products/seed/ -> POST (gera N produtos demo)
-    """
-    permission_classes = [AllowAny]
-    queryset = Product.objects.all()
+    queryset = Product.objects.all().order_by("-id")
     serializer_class = ProductSerializer
+    pagination_class = StandardResultsSetPagination
+    # NÃO sobrescreva .list() manualmente; deixe o DRF paginar sozinho.
 
-    def list(self, request, *args, **kwargs):
-        # paginação simples por query params page/per_page (compatível com DRF PageNumberPagination)
-        return super().list(request, *args, **kwargs)
 
-    @action(detail=False, methods=["post"], url_path="seed")
-    def seed(self, request):
-        try:
-            n = int(request.query_params.get("n", "12"))
-        except ValueError:
-            n = 12
-        n = max(1, min(n, 100))
+@api_view(["POST"])
+@permission_classes([AllowAny])  # ajuste conforme sua necessidade
+def seed_products(request):
+    """
+    POST /api/products/seed/?n=12 -> cria N produtos demo.
+    Em produção, só habilita se ENABLE_SEED=true ou DEBUG=True.
+    """
+    if not getattr(settings, "ENABLE_SEED", False) and not settings.DEBUG:
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
-        created = 0
-        for _ in range(n):
-            sku = "SKU-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-            price_cents = random.randint(1000, 100000)
-            stock = random.randint(0, 100)
-            Product.objects.create(
-                name=f"Produto {sku}",
-                sku=sku,
-                description="Produto de demonstração para catálogo.",
-                price_cents=price_cents,
-                stock=stock,
-            )
-            created += 1
+    try:
+        n = int(request.GET.get("n", 10))
+    except ValueError:
+        n = 10
 
-        return Response({"created": created}, status=status.HTTP_201_CREATED)
+    items = []
+    for _ in range(n):
+        sku = "SKU-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        items.append(Product(
+            name=f"Produto {sku}",
+            sku=sku,
+            description="Produto de demonstração para catálogo.",
+            price_cents=random.randint(1000, 100000),
+            stock=random.randint(0, 100),
+        ))
+    Product.objects.bulk_create(items)
+    return Response({"created": len(items)}, status=status.HTTP_201_CREATED)
+
+
+
 
 
 
