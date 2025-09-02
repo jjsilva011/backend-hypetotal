@@ -1,25 +1,16 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ProductViewSet
-from rest_framework.response import Response
-from rest_framework.decorators import api_view
+from .views import ProductViewSet, health
 
 router = DefaultRouter()
-router.register("products", ProductViewSet, basename="products")
-
-@api_view(["GET"])
-def health(_request):
-    return Response({"service": "Hype Total Backend", "status": "healthy"})
-
-@api_view(["GET"])
-def status(_request):
-    return Response({"ok": True, "status": "healthy", "service": "Hype Total Backend"})
+router.register(r"products", ProductViewSet, basename="products")
 
 urlpatterns = [
+    path("health", health, name="health"),
     path("", include(router.urls)),
-    path("health", health),
-    path("status", status),
 ]
+
+
 
 
 

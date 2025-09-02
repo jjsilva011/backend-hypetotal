@@ -1,32 +1,58 @@
-# C:\Users\jails\OneDrive\Desktop\Backend HypeTotal\api\views.py
-import random, string
-from rest_framework import viewsets
-from rest_framework.decorators import action
+import random
+import string
+from rest_framework import viewsets, status
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+
 from .models import Product
 from .serializers import ProductSerializer
-from django.utils import timezone
 
-class ProductViewSet(viewsets.ViewSet):
-    # GET /api/products/
-    def list(self, request):
-        qs = Product.objects.order_by("-id")
-        data = ProductSerializer(qs, many=True).data
-        return Response({"count": qs.count(), "results": data})
 
-    # GET /api/products/seed/?n=12
-    @action(detail=False, methods=["get"])
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def health(_request):
+    return Response({"service": "Hype Total Backend", "status": "healthy"})
+
+
+class ProductViewSet(viewsets.ModelViewSet):
+    """
+    /api/products/    -> GET (lista), POST (cria)
+    /api/products/{id}/ -> GET/PUT/PATCH/DELETE
+    /api/products/seed/ -> POST (gera N produtos demo)
+    """
+    permission_classes = [AllowAny]
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+
+    def list(self, request, *args, **kwargs):
+        # paginação simples por query params page/per_page (compatível com DRF PageNumberPagination)
+        return super().list(request, *args, **kwargs)
+
+    @action(detail=False, methods=["post"], url_path="seed")
     def seed(self, request):
-        n = int(request.query_params.get("n", 10))
-        ids = []
+        try:
+            n = int(request.query_params.get("n", "12"))
+        except ValueError:
+            n = 12
+        n = max(1, min(n, 100))
+
+        created = 0
         for _ in range(n):
             sku = "SKU-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-            p = Product.objects.create(
+            price_cents = random.randint(1000, 100000)
+            stock = random.randint(0, 100)
+            Product.objects.create(
                 name=f"Produto {sku}",
                 sku=sku,
-                price_cents=random.randint(1_000, 99_999),
-                created_at=timezone.now(),
+                description="Produto de demonstração para catálogo.",
+                price_cents=price_cents,
+                stock=stock,
             )
-            ids.append(p.id)
-        return Response({"created": n, "ids": ids})
+            created += 1
+
+        return Response({"created": created}, status=status.HTTP_201_CREATED)
+
+
+
 
