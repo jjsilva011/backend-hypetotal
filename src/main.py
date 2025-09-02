@@ -1,68 +1,106 @@
+# C:\Users\jails\OneDrive\Desktop\Backend HypeTotal\src\main.py
 import os
-import sys
-from flask import Flask, send_from_directory
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-from src.models.user import db
-from src.routes.user import user_bp
-from src.routes.connectors import connectors_bp
-from src.routes.aliexpress_setup import aliexpress_bp
-from src.routes.demo_setup import demo_bp
-from src.routes.cj_setup import cj_bp
-from src.routes.spocket_setup import spocket_bp
-from src.routes.ecommerce import ecommerce_bp
+from sqlalchemy import inspect, text
 
-# Corrige sys.path
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from src.models import db
+from src.blueprints import products as products_bp
 
-app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
-app.config['SECRET_KEY'] = 'hype_total_secret_key_2025'
+def create_app():
+    app = Flask(__name__)
+    app.url_map.strict_slashes = False
 
-# ✅ CORS liberando só seu domínio
-CORS(app, resources={
-    r"/api/*": {
-        "origins": [
-            "https://hypetotal.com",
-            "https://www.hypetotal.com"
-        ]
-    }
-})
-
-# Registra todos os blueprints
-app.register_blueprint(user_bp, url_prefix='/api')
-app.register_blueprint(connectors_bp, url_prefix='/api')
-app.register_blueprint(aliexpress_bp, url_prefix='/api')
-app.register_blueprint(demo_bp, url_prefix='/api')
-app.register_blueprint(cj_bp, url_prefix='/api')
-app.register_blueprint(spocket_bp, url_prefix='/api')
-app.register_blueprint(ecommerce_bp, url_prefix='/api')
-
-# ✅ Configuração do banco (Render usa PostgreSQL, local usa SQLite)
-DEFAULT_SQLITE = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}"
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", DEFAULT_SQLITE)
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db.init_app(app)
-
-with app.app_context():
-    db.create_all()
-
-# ✅ Health Check
-@app.route('/api/health')
-def health_check():
-    return {'status': 'healthy', 'service': 'Hype Total Backend'}, 200
-
-# ✅ Roteamento do frontend (caso hospede junto)
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve(path):
-    static_folder_path = app.static_folder
-    if static_folder_path and path != "" and os.path.exists(os.path.join(static_folder_path, path)):
-        return send_from_directory(static_folder_path, path)
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        app.config["SQLALCHEMY_DATABASE_URI"] = db_url
     else:
-        index_path = os.path.join(static_folder_path, 'index.html')
-        if os.path.exists(index_path):
-            return send_from_directory(static_folder_path, 'index.html')
-        return "index.html not found", 404
+        base = os.path.abspath(os.path.dirname(__file__))
+        app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.path.join(base, 'database', 'app.db')}"
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    allowed = os.getenv("ALLOWED_CORS_ORIGINS")
+    if allowed:
+        origins = [o.strip() for o in allowed.split(",") if o.strip()]
+        CORS(app, resources={r"/api/*": {"origins": origins}})
+    else:
+        CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+    db.init_app(app)
+
+    # Cria/ajusta schema sem Alembic
+    with app.app_context():
+        db.create_all()
+        insp = inspect(db.engine)
+        try:
+            cols = {c["name"] for c in insp.get_columns("products")}
+        except Exception:
+            cols = set()
+
+        if "description" not in cols:
+            db.session.execute(text("ALTER TABLE products ADD COLUMN description TEXT"))
+            db.session.commit()
+
+        if "sku" not in cols:
+            db.session.execute(text("ALTER TABLE products ADD COLUMN sku VARCHAR(64)"))
+            db.session.commit()
+
+        if "stock" not in cols:
+            # Em SQLite, DEFAULT preenche linhas existentes; ainda assim normalizamos depois.
+            db.session.execute(text("ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 0"))
+            db.session.commit()
+
+        # Normalizações para dados antigos
+        # Preenche SKU vazio
+        dialect = db.engine.dialect.name
+        if "sku" in cols or True:
+            if dialect == "sqlite":
+                db.session.execute(
+                    text("UPDATE products SET sku = 'SKU-' || printf('%03d', id) WHERE sku IS NULL OR sku = ''")
+                )
+            else:
+                db.session.execute(
+                    text("UPDATE products SET sku = 'SKU-' || LPAD(id::text, 3, '0') WHERE (sku IS NULL OR sku = '')")
+                )
+            db.session.commit()
+
+        # Garante stock não-nulo
+        db.session.execute(text("UPDATE products SET stock = 0 WHERE stock IS NULL"))
+        db.session.commit()
+
+    @app.get("/api/health")
+    def health():
+        return jsonify({"service": "Hype Total Backend", "status": "healthy"})
+
+    app.register_blueprint(products_bp.bp)
+
+    @app.errorhandler(404)
+    def not_found(e):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Not Found", "path": request.path}), 404
+        return e
+
+    return app
+
+app = create_app()
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5001, debug=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

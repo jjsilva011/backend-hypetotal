@@ -1,7 +1,9 @@
-venv/
+﻿.venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.sqlite
+*.db
 .env
-.env.*
 .DS_Store
-*.log
