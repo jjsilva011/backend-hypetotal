@@ -23,16 +23,14 @@ class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all().order_by("-id")
     serializer_class = ProductSerializer
     pagination_class = StandardResultsSetPagination
-    # NÃO sobrescreva .list() manualmente; deixe o DRF paginar sozinho.
+    # IMPORTANTE: não sobrescreva .list(); deixe o DRF paginar.
 
 
 @api_view(["POST"])
-@permission_classes([AllowAny])  # ajuste conforme sua necessidade
+@permission_classes([AllowAny])  # ajuste conforme necessidade
 def seed_products(request):
-    """
-    POST /api/products/seed/?n=12 -> cria N produtos demo.
-    Em produção, só habilita se ENABLE_SEED=true ou DEBUG=True.
-    """
+    """POST /api/products/seed/?n=12 -> cria N produtos demo.
+       Em prod, só habilita se ENABLE_SEED=true ou DEBUG=True."""
     if not getattr(settings, "ENABLE_SEED", False) and not settings.DEBUG:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -53,6 +51,7 @@ def seed_products(request):
         ))
     Product.objects.bulk_create(items)
     return Response({"created": len(items)}, status=status.HTTP_201_CREATED)
+
 
 
 
