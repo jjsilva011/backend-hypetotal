@@ -7,3 +7,5 @@ __pycache__/
 *.db
 .env
 .DS_Store
+
+src/models/_backup/
