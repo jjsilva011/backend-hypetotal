@@ -1,9 +1,7 @@
-Flask==3.1.1
-Flask-Cors==6.0.0
-Flask-SQLAlchemy==3.1.1
-SQLAlchemy==2.0.41
-requests==2.32.3
+Django==5.2.5
+djangorestframework==3.16.1
+django-cors-headers==4.4.0
 gunicorn==22.0.0
-typing_extensions==4.14.0
-psycopg[binary]==3.2.9
-
+asgiref==3.9.1
+sqlparse==0.5.3
+tzdata==2025.2
