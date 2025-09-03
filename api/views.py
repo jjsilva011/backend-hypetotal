@@ -1,3 +1,4 @@
+# api/views.py
 from __future__ import annotations
 
 import os
@@ -15,18 +16,15 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
-from .models import Product
-from .serializers import ProductSerializer
+# --- Importações atualizadas ---
+from .models import Product, Supplier, Order
+from .serializers import ProductSerializer, SupplierSerializer, OrderSerializer
 
 
 # ------------------------------------------------------------
 # Health check
 # ------------------------------------------------------------
-def health(request):
-    """
-    GET /api/health  -> 200 {"service": "...", "status": "healthy"}
-    (Também é mapeado em /api/health/ no urls.py)
-    """
+def health(request ):
     return JsonResponse({"service": "Hype Total Backend", "status": "healthy"})
 
 
@@ -41,8 +39,6 @@ class StandardResultsSetPagination(PageNumberPagination):
 
 # ------------------------------------------------------------
 # Products CRUD
-#   /api/products/        -> GET (lista paginada), POST (cria)
-#   /api/products/{id}/   -> GET/PUT/PATCH/DELETE
 # ------------------------------------------------------------
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all().order_by("-id")
@@ -52,21 +48,36 @@ class ProductViewSet(viewsets.ModelViewSet):
 
 
 # ------------------------------------------------------------
+# Suppliers CRUD
+# ------------------------------------------------------------
+class SupplierViewSet(viewsets.ModelViewSet):
+    queryset = Supplier.objects.all().order_by("name")
+    serializer_class = SupplierSerializer
+    permission_classes = [AllowAny]
+    pagination_class = StandardResultsSetPagination
+
+
+# --- ADICIONE A VIEWSET DE ORDER ABAIXO ---
+# ------------------------------------------------------------
+# Orders CRUD
+# ------------------------------------------------------------
+class OrderViewSet(viewsets.ModelViewSet):
+    # Usamos .prefetch_related('items__product') para otimizar a consulta,
+    # buscando todos os itens e seus produtos relacionados de uma só vez.
+    queryset = Order.objects.all().prefetch_related('items__product').order_by("-created_at")
+    serializer_class = OrderSerializer
+    permission_classes = [AllowAny]
+    pagination_class = StandardResultsSetPagination
+
+
+# ------------------------------------------------------------
 # Seed de produtos de demonstração
-#   POST /api/products/seed/?n=12
-#   Requer DEBUG=True ou ENABLE_SEED=true no ambiente
-#   OPTIONS deste endpoint expõe o schema ("actions") de POST
 # ------------------------------------------------------------
 class SeedView(generics.GenericAPIView):
-    """
-    Gera N produtos demo com SKU único, price_cents e stock aleatórios.
-    Respeita ?n= (1..100). Resposta: 201 {"created": N}
-    """
     serializer_class = ProductSerializer
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs) -> Response:
-        # Segurança: só habilita em DEV ou quando explicitamente permitido
         enabled = bool(settings.DEBUG) or os.environ.get("ENABLE_SEED", "").lower() == "true"
         if not enabled:
             return Response(
@@ -79,13 +90,12 @@ class SeedView(generics.GenericAPIView):
         except ValueError:
             n = 12
 
-        n = max(1, min(n, 100))  # clamp 1..100
+        n = max(1, min(n, 100))
 
         created = 0
         with transaction.atomic():
             for _ in range(n):
                 sku = self._random_sku()
-                # tenta algumas vezes garantir SKU único
                 for _attempt in range(5):
                     try:
                         Product.objects.create(
@@ -107,6 +117,8 @@ class SeedView(generics.GenericAPIView):
     def _random_sku(length: int = 8) -> str:
         chars = string.ascii_uppercase + string.digits
         return "SKU-" + "".join(random.choices(chars, k=length))
+
+
 
 
 

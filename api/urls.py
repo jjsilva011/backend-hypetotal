@@ -1,10 +1,15 @@
+# api/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from .views import health, ProductViewSet, SeedView
+# --- Importação atualizada ---
+from .views import health, ProductViewSet, SupplierViewSet, OrderViewSet, SeedView
 
 router = DefaultRouter()
 router.register(r'products', ProductViewSet, basename='product')
+router.register(r'suppliers', SupplierViewSet, basename='supplier')
+# --- Adicione a linha abaixo para registrar os pedidos ---
+router.register(r'orders', OrderViewSet, basename='order')
 
 urlpatterns = [
     # health (sem e com / para evitar 404 do health-check)
@@ -17,9 +22,6 @@ urlpatterns = [
     # endpoints REST do DRF:
     path('', include(router.urls)),
 ]
-
-
-
 
 
 
