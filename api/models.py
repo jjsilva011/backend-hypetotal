@@ -1,4 +1,4 @@
-# api/models.py
+# api/models.py (Versão Final Corrigida)
 from django.db import models
 
 class Product(models.Model):
@@ -29,11 +29,10 @@ class Supplier(models.Model):
     class Meta:
         ordering = ['name']
 
-# --- ADICIONE OS MODELOS DE PEDIDO ABAIXO ---
-
 class Order(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pendente'),
+        ('paid', 'Pago'), # Adicionei 'paid' que estava no frontend
         ('processing', 'Processando'),
         ('shipped', 'Enviado'),
         ('delivered', 'Entregue'),
@@ -56,10 +55,14 @@ class OrderItem(models.Model):
     order = models.ForeignKey(Order, related_name='items', on_delete=models.CASCADE)
     product = models.ForeignKey(Product, related_name='order_items', on_delete=models.PROTECT)
     quantity = models.PositiveIntegerField(default=1)
-    price_cents_at_time_of_order = models.PositiveIntegerField(help_text="Preço do item em centavos no momento do pedido")
+    
+    # --- CORREÇÃO APLICADA AQUI ---
+    # Renomeado para corresponder ao que o serializer espera.
+    price_cents = models.PositiveIntegerField(help_text="Preço do item em centavos no momento do pedido")
 
     def __str__(self):
         return f"{self.quantity}x {self.product.name} no Pedido #{self.order.id}"
+
 
 
 
