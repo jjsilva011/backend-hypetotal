@@ -1,62 +1,50 @@
-from pathlib import Path
+# myproject/settings.py (Versão Final de Produção)
 import os
-
-# -------------------------
-# .env opcional (instance/.env)
-# -------------------------
+from pathlib import Path
+import dj_database_url
 from dotenv import load_dotenv
 
+# Carrega variáveis de ambiente de um arquivo .env (útil para desenvolvimento local)
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = BASE_DIR / "instance" / ".env"
 if ENV_PATH.exists():
     load_dotenv(ENV_PATH)
 
-# -------------------------
-# Segurança / modo
-# -------------------------
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "change-me-in-prod")
+# Chave secreta
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-fallback-key-for-dev")
+
+# DEBUG mode
+# Em produção (Render), DEBUG deve ser 'False'.
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
-def csv_env(name: str, default: str = "") -> list[str]:
-    """
-    Lê uma variável de ambiente como CSV e devolve lista limpa.
-    Ex.: "a,b, c " -> ["a","b","c"]
-    """
-    raw = os.getenv(name, default)
-    return [x.strip() for x in raw.split(",") if x.strip()]
+# Hosts permitidos
+ALLOWED_HOSTS = []
+RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+if RENDER_EXTERNAL_HOSTNAME:
+    ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
+ALLOWED_HOSTS.append('api.hypetotal.com')
+ALLOWED_HOSTS.append('www.hypetotal.com') # Adicionado para segurança
 
-ALLOWED_HOSTS = csv_env(
-    "ALLOWED_HOSTS",
-    "127.0.0.1,localhost,api.hypetotal.com,www.hypetotal.com,staging.hypetotal.com"
-)
-
-# -------------------------
-# Apps
-# -------------------------
+# Application definition
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
+    "whitenoise.runserver_nostatic", # Adicionado para servir estáticos em dev
     "django.contrib.staticfiles",
-
-    # terceiros
     "rest_framework",
     "django_filters",
     "corsheaders",
-
-    # app local
     "api",
 ]
 
-# -------------------------
-# Middlewares
-# -------------------------
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",  # antes do CommonMiddleware
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware", # WhiteNoise para servir estáticos
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -83,36 +71,17 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "myproject.wsgi.application"
-ASGI_APPLICATION = "myproject.asgi.application"
 
-# -------------------------
-# Banco de dados (robusto)
-# -------------------------
-DB_URL = os.getenv("DATABASE_URL", "").strip()
-try:
-    from dj_database_url import parse as dburl  # type: ignore
-except Exception:
-    dburl = None
+# --- Banco de dados (robusto para produção) ---
+DATABASES = {
+    'default': dj_database_url.config(
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+        conn_max_age=600,
+        ssl_require=os.getenv("RENDER", "") != ""
+    )
+}
 
-if DB_URL and dburl:
-    DATABASES = {
-        "default": dburl(
-            DB_URL,
-            conn_max_age=600,
-            ssl_require=os.getenv("REQUIRE_DB_SSL", "1") == "1",
-        )
-    }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": str(BASE_DIR / "db.sqlite3"),
-        }
-    }
-
-# -------------------------
-# Validações de senha (padrão)
-# -------------------------
+# Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -120,29 +89,20 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# -------------------------
 # Locale / Fuso horário
-# -------------------------
 LANGUAGE_CODE = "pt-br"
 TIME_ZONE = "America/Sao_Paulo"
 USE_I18N = True
 USE_TZ = True
 
-# -------------------------
 # Arquivos estáticos
-# -------------------------
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# -------------------------
-# Conveniência
-# -------------------------
-APPEND_SLASH = True
-
-# -------------------------
 # DRF (paginação + filtros/busca/ordenação)
-# -------------------------
 REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
@@ -153,59 +113,28 @@ REST_FRAMEWORK = {
     ],
 }
 
-# -------------------------
 # CORS / CSRF
-# (⚠️ csv_env já foi definido acima; não mover este bloco para cima)
-# -------------------------
-CORS_ALLOWED_ORIGINS = csv_env(
-    "CORS_ALLOWED_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173,https://hypetotal.com,https://www.hypetotal.com"
-)
-
-CSRF_TRUSTED_ORIGINS = csv_env(
-    "CSRF_TRUSTED_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173,https://hypetotal.com,https://www.hypetotal.com"
-)
-
+CORS_ALLOWED_ORIGINS = [
+    "https://hypetotal.com",
+    "https://www.hypetotal.com",
+    "http://localhost:5173",
+]
+CSRF_TRUSTED_ORIGINS = [
+    "https://hypetotal.com",
+    "https://www.hypetotal.com",
+    "http://localhost:5173",
+]
 CORS_ALLOW_CREDENTIALS = True
 
-# Aceita qualquer porta de localhost/127.0.0.1 (Vite pode usar 5173/5174/5175…)
-CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^http://localhost:\d+$",
-    r"^http://127\.0\.0\.1:\d+$",
-]
-
-# -------------------------
-# Segurança (produção)
-# -------------------------
-SECURE_SSL_REDIRECT = not DEBUG
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
-SECURE_HSTS_SECONDS = 0 if DEBUG else 31536000
-SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
-SECURE_HSTS_PRELOAD = not DEBUG
-SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
-X_FRAME_OPTIONS = "SAMEORIGIN"
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-
-# -------------------------
-# Flag operacional para seed
-# -------------------------
-ENABLE_SEED = os.getenv("ENABLE_SEED", "false").lower() == "true"
-
-# -------------------------
-# Logging simples
-# -------------------------
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
-    "root": {"handlers": ["console"], "level": "INFO"},
-}
-
-
-
-
+# Segurança (produção )
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https" )
 
 
 
