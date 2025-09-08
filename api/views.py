@@ -1,29 +1,12 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # api/views.py — categorias com annotate(product_count) e filtros em produtos
 
+from django.apps import apps
 from django.db.models import Count
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .models import Product, Supplier, Order, Category
+from .models import Product, Supplier, Order  # <- sem Category aqui
 from .serializers import (
     ProductSerializer,
     SupplierSerializer,
@@ -33,7 +16,6 @@ from .serializers import (
     OrderReadSerializer,
 )
 
-
 # -------------------------
 # Categorias (read-only)
 # -------------------------
@@ -41,14 +23,13 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = CategorySerializer
 
     def get_queryset(self):
-        # Requer que Product.category use related_name="products".
-        # Se não usar, troque "products" por "product_set".
+        # Resolve o modelo só em runtime; evita ImportError no boot
+        CategoryModel = apps.get_model("api", "Category")
         return (
-            Category.objects.all()
+            CategoryModel.objects.all()
             .annotate(product_count=Count("products"))
             .order_by("name")
         )
-
 
 # -------------------------
 # Produtos (CRUD)
@@ -98,7 +79,6 @@ class ProductViewSet(viewsets.ModelViewSet):
             created += 1
         return Response({"created": created})
 
-
 # -------------------------
 # Fornecedores (CRUD)
 # -------------------------
@@ -108,7 +88,6 @@ class SupplierViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "email", "contact_person", "phone"]
     ordering_fields = ["name", "created_at", "updated_at"]
-
 
 # -------------------------
 # Pedidos (CRUD)
@@ -130,3 +109,4 @@ class OrderViewSet(viewsets.ModelViewSet):
         if self.action in ("create",):
             return OrderCreateSerializer
         return OrderReadSerializer
+
