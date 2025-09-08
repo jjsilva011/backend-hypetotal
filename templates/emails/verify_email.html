@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="pt-BR">
+  <body style="font-family:Arial,Helvetica,sans-serif;color:#111">
+    <h2>Confirme seu e-mail</h2>
+    <p>Olá <b>{{ customer.name }}</b>,</p>
+    <p>Para concluir seu cadastro na HypeTotal, confirme seu e-mail:</p>
+    <p>
+      <a href="{{ front_verify_url }}" style="background:#111827;color:#fff;padding:10px 14px;border-radius:8px;text-decoration:none">
+        Confirmar e-mail
+      </a>
+    </p>
+    <p style="color:#555">Se preferir, você pode usar este link alternativo (técnico):<br>
+      <a href="{{ api_verify_url }}">{{ api_verify_url }}</a>
+    </p>
+    <p style="color:#777">Se não foi você, ignore este e-mail.</p>
+    <p>— HypeTotal</p>
+  </body>
+</html>

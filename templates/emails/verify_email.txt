@@ -1,0 +1,13 @@
+Olá {{ customer.name }},
+
+Confirme seu e-mail para continuar seu cadastro na HypeTotal.
+
+Clique no link:
+{{ front_verify_url }}
+
+Se preferir, você pode usar este link alternativo (técnico):
+{{ api_verify_url }}
+
+Se não foi você, ignore este e-mail.
+
+— HypeTotal
