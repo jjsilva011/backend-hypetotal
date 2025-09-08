@@ -1,20 +1,20 @@
-# api/views.py — categorias com annotate(product_count) e filtros em produtos
+# api/views.py — categorias com annotate(product_count), filtros em produtos
+# e criação de pedidos blindada (sem 500 em /api/orders/)
 
-from django.apps import apps
 from django.db.models import Count
-from rest_framework import viewsets, filters
+from rest_framework import viewsets, filters, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .models import Product, Supplier, Order  # <- sem Category aqui
+from .models import Product, Supplier, Order, Category
 from .serializers import (
     ProductSerializer,
     SupplierSerializer,
     CategorySerializer,
-    # Pedidos — serializers separados para escrita/leitura
     OrderCreateSerializer,
     OrderReadSerializer,
 )
+
 
 # -------------------------
 # Categorias (read-only)
@@ -23,13 +23,14 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = CategorySerializer
 
     def get_queryset(self):
-        # Resolve o modelo só em runtime; evita ImportError no boot
-        CategoryModel = apps.get_model("api", "Category")
+        # Requer que Product.category use related_name="products".
+        # Se não usar, troque "products" por "product_set".
         return (
-            CategoryModel.objects.all()
+            Category.objects.all()
             .annotate(product_count=Count("products"))
             .order_by("name")
         )
+
 
 # -------------------------
 # Produtos (CRUD)
@@ -63,7 +64,6 @@ class ProductViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Seed desabilitado."}, status=403)
 
         import random, string
-        from .models import Product
 
         created = 0
         for _ in range(12):
@@ -79,6 +79,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             created += 1
         return Response({"created": created})
 
+
 # -------------------------
 # Fornecedores (CRUD)
 # -------------------------
@@ -89,13 +90,15 @@ class SupplierViewSet(viewsets.ModelViewSet):
     search_fields = ["name", "email", "contact_person", "phone"]
     ordering_fields = ["name", "created_at", "updated_at"]
 
+
 # -------------------------
 # Pedidos (CRUD)
 # -------------------------
 class OrderViewSet(viewsets.ModelViewSet):
     """
-    POST -> OrderCreateSerializer (escrita)
-    GET/PUT/PATCH -> OrderReadSerializer (leitura)
+    create() blindado:
+      - Valida e mapeia erros para 400 (sem 500).
+      - Resposta de sucesso no formato de leitura (OrderReadSerializer).
     """
     queryset = (
         Order.objects.all()
@@ -106,7 +109,30 @@ class OrderViewSet(viewsets.ModelViewSet):
     ordering_fields = ["created_at", "total_price_cents", "status"]
 
     def get_serializer_class(self):
-        if self.action in ("create",):
+        if self.action in ("create", "update", "partial_update"):
             return OrderCreateSerializer
         return OrderReadSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        try:
+            serializer.is_valid(raise_exception=True)
+            order = serializer.save()
+        except serializers.ValidationError as e:
+            # Erros de validação: sempre 400 com corpo legível
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            # Qualquer outra exceção: 400 com detalhe (evita 500) + log
+            import logging, traceback
+            logging.exception("Order create failed: %s", e)
+            return Response(
+                {"detail": "Falha ao criar pedido.", "error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Representação final no formato READ
+        data = OrderReadSerializer(order, context=self.get_serializer_context()).data
+        headers = self.get_success_headers(data)
+        return Response(data, status=status.HTTP_201_CREATED, headers=headers)
+
 
