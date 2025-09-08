@@ -1,5 +1,4 @@
-# C:\Users\jails\OneDrive\Desktop\Backend HypeTotal\api\serializers.py
-# api/serializers.py — produtos + pedido com SERIALIZERS separados para escrita/leitura (sem gambiarra)
+# api/serializers.py — produtos + pedido com SERIALIZERS separados (write/read) e validações robustas
 
 from django.db import transaction
 from rest_framework import serializers
@@ -14,11 +13,19 @@ from .models import (
 
 # --------- Categorias ---------
 class CategorySerializer(serializers.ModelSerializer):
-    product_count = serializers.IntegerField(read_only=True)
+    # Usa annotate se vier, senão calcula .products.count()
+    product_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Category
         fields = ["id", "name", "slug", "created_at", "product_count"]
+
+    def get_product_count(self, obj):
+        try:
+            return getattr(obj, "product_count", None) or obj.products.count()
+        except Exception:
+            return 0
+
 
 # --------- Mídia do Produto (imagens/vídeos) ---------
 class ProductMediaSerializer(serializers.ModelSerializer):
@@ -40,6 +47,7 @@ class ProductMediaSerializer(serializers.ModelSerializer):
             return obj.file.url if obj.file else ""
         except Exception:
             return ""
+
 
 # --------- Produto ---------
 class ProductSerializer(serializers.ModelSerializer):
@@ -75,7 +83,7 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
 
     def get_price_formatted(self, obj):
-        cents = obj.price_cents or 0
+        cents = int(obj.price_cents or 0)
         reais = cents / 100.0
         return f"R$ {reais:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -85,64 +93,91 @@ class ProductSerializer(serializers.ModelSerializer):
         except Exception:
             return ""
 
+
 # --------- Fornecedor ---------
 class SupplierSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
         fields = "__all__"
 
+
 # ===========================
 #  PEDIDO / ITENS (WRITE)
 # ===========================
 class OrderItemWriteSerializer(serializers.ModelSerializer):
-    # recebemos product_id no payload
-    product_id = serializers.IntegerField(write_only=True)
+    # Recebemos product_id no payload e resolvemos para Product
+    product_id = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.all(),
+        source="product",
+        write_only=True,
+    )
 
     class Meta:
         model = OrderItem
-        fields = ("id", "product_id", "quantity", "price_cents", "product")
-        read_only_fields = ("id", "price_cents", "product")
+        fields = ("product_id", "quantity")  # price_cents calculado no servidor
 
-    def validate(self, attrs):
-        qty = int(attrs.get("quantity") or 0)
-        if qty < 1:
-            raise serializers.ValidationError({"quantity": "Deve ser ≥ 1"})
-        return attrs
+    def validate_quantity(self, value):
+        try:
+            q = int(value)
+        except Exception:
+            raise serializers.ValidationError("Quantidade inválida.")
+        if q <= 0:
+            raise serializers.ValidationError("Quantidade deve ser ≥ 1.")
+        return q
+
 
 class OrderCreateSerializer(serializers.ModelSerializer):
     items = OrderItemWriteSerializer(many=True)
 
     class Meta:
         model = Order
-        fields = ("id", "customer_name", "status", "total_price_cents", "items", "created_at", "updated_at")
-        read_only_fields = ("id", "status", "total_price_cents", "created_at", "updated_at")
+        fields = (
+            "id",
+            "customer_name",
+            "status",              # opcional; default do model = "pending"
+            "total_price_cents",   # read-only no create (será calculado)
+            "items",
+            "created_at",
+            "updated_at",
+        )
+    # id/total/created/updated são controlados pelo servidor
+    read_only_fields = ("id", "total_price_cents", "created_at", "updated_at")
+
+    def validate_items(self, value):
+        if not value:
+            raise serializers.ValidationError("Informe ao menos 1 item.")
+        return value
 
     @transaction.atomic
     def create(self, validated_data):
+        """
+        Criação transacional de Order + OrderItems.
+        - resolve product_id -> product (já feito pelo serializer filho)
+        - fixa price_cents no momento do pedido
+        - soma total_price_cents
+        """
         items_data = validated_data.pop("items", [])
-        if not items_data:
-            raise serializers.ValidationError({"items": "Obrigatório e não pode ser vazio."})
+        # status respeita o default "pending" do model, a menos que venha no payload
+        order = Order.objects.create(**validated_data)
 
-        # cria pedido pendente
-        order = Order.objects.create(
-            customer_name=validated_data["customer_name"],
-            status="pending",
-            total_price_cents=0,
-        )
-
-        from .models import Product, OrderItem  # import local para evitar ciclos
-        total = 0
-        for item in items_data:
-            # busca o produto e fixa preço do momento
-            product = Product.objects.get(pk=item["product_id"])
+        total_cents = 0
+        for idx, item in enumerate(items_data):
+            product = item["product"]          # já é instancia de Product
             qty = int(item.get("quantity") or 1)
-            price = int(product.price_cents or 0)
-            OrderItem.objects.create(order=order, product=product, quantity=qty, price_cents=price)
-            total += price * qty
+            price_cents = int(product.price_cents or 0)
 
-        order.total_price_cents = total
+            OrderItem.objects.create(
+                order=order,
+                product=product,
+                quantity=qty,
+                price_cents=price_cents,
+            )
+            total_cents += price_cents * qty
+
+        order.total_price_cents = total_cents
         order.save(update_fields=["total_price_cents"])
         return order
+
 
 # ===========================
 #  PEDIDO / ITENS (READ)
@@ -153,6 +188,7 @@ class OrderItemReadSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderItem
         fields = ("id", "product", "quantity", "price_cents")
+
 
 class OrderReadSerializer(serializers.ModelSerializer):
     items = OrderItemReadSerializer(many=True, read_only=True)
@@ -173,9 +209,9 @@ class OrderReadSerializer(serializers.ModelSerializer):
 
     def get_total_price_formatted(self, obj):
         cents = int(obj.total_price_cents or 0)
-        reais = cents // 100
-        cent = cents % 100
-        return f"R$ {reais:,},{cent:02d}".replace(",", "X").replace(".", ",").replace("X", ".")
+        reais = cents / 100.0
+        return f"R$ {reais:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 
 
 
