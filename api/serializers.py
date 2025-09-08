@@ -1,4 +1,4 @@
-# api/serializers.py — produtos + pedido com SERIALIZERS separados (write/read) e validações robustas
+# api/serializers.py — produtos + pedido (WRITE/READ) com create() blindado contra 500
 
 from django.db import transaction
 from rest_framework import serializers
@@ -114,7 +114,7 @@ class OrderItemWriteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OrderItem
-        fields = ("product_id", "quantity")  # price_cents calculado no servidor
+        fields = ("product_id", "quantity")  # price_cents é calculado no servidor
 
     def validate_quantity(self, value):
         try:
@@ -140,7 +140,6 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-    # id/total/created/updated são controlados pelo servidor
     read_only_fields = ("id", "total_price_cents", "created_at", "updated_at")
 
     def validate_items(self, value):
@@ -155,28 +154,53 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         - resolve product_id -> product (já feito pelo serializer filho)
         - fixa price_cents no momento do pedido
         - soma total_price_cents
+        - converte qualquer falha inesperada em 400 com mensagem legível (nada de 500)
         """
-        items_data = validated_data.pop("items", [])
-        # status respeita o default "pending" do model, a menos que venha no payload
-        order = Order.objects.create(**validated_data)
+        try:
+            items_data = validated_data.pop("items", [])
+            if not items_data:
+                raise serializers.ValidationError({"items": "Obrigatório e não pode ser vazio."})
 
-        total_cents = 0
-        for idx, item in enumerate(items_data):
-            product = item["product"]          # já é instancia de Product
-            qty = int(item.get("quantity") or 1)
-            price_cents = int(product.price_cents or 0)
+            # cria o pedido (status default = pending, salvo se cliente mandar)
+            order = Order.objects.create(**validated_data)
 
-            OrderItem.objects.create(
-                order=order,
-                product=product,
-                quantity=qty,
-                price_cents=price_cents,
-            )
-            total_cents += price_cents * qty
+            total_cents = 0
+            for idx, item in enumerate(items_data, start=1):
+                product = item.get("product")
+                if not isinstance(product, Product):
+                    raise serializers.ValidationError({
+                        "items": {idx - 1: {"product_id": "Produto inválido ou inexistente."}}
+                    })
 
-        order.total_price_cents = total_cents
-        order.save(update_fields=["total_price_cents"])
-        return order
+                qty = int(item.get("quantity") or 1)
+                if qty <= 0:
+                    raise serializers.ValidationError({
+                        "items": {idx - 1: {"quantity": "Quantidade deve ser ≥ 1."}}
+                    })
+
+                price_cents = int(product.price_cents or 0)
+
+                OrderItem.objects.create(
+                    order=order,
+                    product=product,
+                    quantity=qty,
+                    price_cents=price_cents,
+                )
+                total_cents += price_cents * qty
+
+            order.total_price_cents = total_cents
+            order.save(update_fields=["total_price_cents"])
+            return order
+
+        except Product.DoesNotExist:
+            # não deve acontecer porque PKRelatedField já valida, mas sejamos explícitos
+            raise serializers.ValidationError({"items": "Produto informado não existe."})
+        except serializers.ValidationError:
+            # repassa validações amigáveis
+            raise
+        except Exception as e:
+            # último guarda-chuva: transforma 500 em 400 com mensagem
+            raise serializers.ValidationError({"detail": f"Falha ao criar pedido: {str(e)}"})
 
 
 # ===========================
@@ -211,6 +235,7 @@ class OrderReadSerializer(serializers.ModelSerializer):
         cents = int(obj.total_price_cents or 0)
         reais = cents / 100.0
         return f"R$ {reais:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 
 
 
