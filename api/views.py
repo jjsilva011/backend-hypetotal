@@ -1,130 +1,132 @@
-# api/views.py
-from __future__ import annotations
 
-import os
-import random
-import string
-from typing import List
 
-from django.conf import settings
-from django.db import IntegrityError, transaction
-from django.http import JsonResponse
-from django.utils import timezone
 
-from rest_framework import generics, status, viewsets
-from rest_framework.permissions import AllowAny
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# api/views.py — categorias com annotate(product_count) e filtros em produtos
+
+from django.db.models import Count
+from rest_framework import viewsets, filters
+from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.pagination import PageNumberPagination
 
-# --- Importações atualizadas ---
-from .models import Product, Supplier, Order
-from .serializers import ProductSerializer, SupplierSerializer, OrderSerializer
-
-
-# ------------------------------------------------------------
-# Health check
-# ------------------------------------------------------------
-def health(request ):
-    return JsonResponse({"service": "Hype Total Backend", "status": "healthy"})
+from .models import Product, Supplier, Order, Category
+from .serializers import (
+    ProductSerializer,
+    SupplierSerializer,
+    CategorySerializer,
+    # Pedidos — serializers separados para escrita/leitura
+    OrderCreateSerializer,
+    OrderReadSerializer,
+)
 
 
-# ------------------------------------------------------------
-# Paginação padrão (?page=1&per_page=20)
-# ------------------------------------------------------------
-class StandardResultsSetPagination(PageNumberPagination):
-    page_size = 20
-    page_size_query_param = "per_page"
-    max_page_size = 100
+# -------------------------
+# Categorias (read-only)
+# -------------------------
+class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = CategorySerializer
+
+    def get_queryset(self):
+        # Requer que Product.category use related_name="products".
+        # Se não usar, troque "products" por "product_set".
+        return (
+            Category.objects.all()
+            .annotate(product_count=Count("products"))
+            .order_by("name")
+        )
 
 
-# ------------------------------------------------------------
-# Products CRUD
-# ------------------------------------------------------------
+# -------------------------
+# Produtos (CRUD)
+# -------------------------
 class ProductViewSet(viewsets.ModelViewSet):
-    queryset = Product.objects.all().order_by("-id")
     serializer_class = ProductSerializer
-    permission_classes = [AllowAny]
-    pagination_class = StandardResultsSetPagination
+    queryset = Product.objects.all().select_related("category").order_by("-id")
 
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "sku", "description"]
+    ordering_fields = ["id", "name", "price_cents", "stock", "created_at"]
 
-# ------------------------------------------------------------
-# Suppliers CRUD
-# ------------------------------------------------------------
-class SupplierViewSet(viewsets.ModelViewSet):
-    queryset = Supplier.objects.all().order_by("name")
-    serializer_class = SupplierSerializer
-    permission_classes = [AllowAny]
-    pagination_class = StandardResultsSetPagination
+    def get_queryset(self):
+        qs = super().get_queryset()
+        category_id = self.request.query_params.get("category_id")
+        category = self.request.query_params.get("category")
+        category_slug = self.request.query_params.get("category_slug")
+        if category_id or category:
+            qs = qs.filter(category_id=category_id or category)
+        if category_slug:
+            qs = qs.filter(category__slug=category_slug)
+        return qs
 
+    @action(detail=False, methods=["post"])
+    def seed(self, request):
+        """
+        Cria produtos fake (respeita ENABLE_SEED ou DEBUG no settings).
+        """
+        from django.conf import settings
+        if not (getattr(settings, "ENABLE_SEED", False) or settings.DEBUG):
+            return Response({"detail": "Seed desabilitado."}, status=403)
 
-# --- ADICIONE A VIEWSET DE ORDER ABAIXO ---
-# ------------------------------------------------------------
-# Orders CRUD
-# ------------------------------------------------------------
-class OrderViewSet(viewsets.ModelViewSet):
-    # Usamos .prefetch_related('items__product') para otimizar a consulta,
-    # buscando todos os itens e seus produtos relacionados de uma só vez.
-    queryset = Order.objects.all().prefetch_related('items__product').order_by("-created_at")
-    serializer_class = OrderSerializer
-    permission_classes = [AllowAny]
-    pagination_class = StandardResultsSetPagination
-
-
-# ------------------------------------------------------------
-# Seed de produtos de demonstração
-# ------------------------------------------------------------
-class SeedView(generics.GenericAPIView):
-    serializer_class = ProductSerializer
-    permission_classes = [AllowAny]
-
-    def post(self, request, *args, **kwargs) -> Response:
-        enabled = bool(settings.DEBUG) or os.environ.get("ENABLE_SEED", "").lower() == "true"
-        if not enabled:
-            return Response(
-                {"detail": "Seeding desabilitado. Defina ENABLE_SEED=true ou DEBUG=True."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        try:
-            n = int(request.query_params.get("n", 12))
-        except ValueError:
-            n = 12
-
-        n = max(1, min(n, 100))
+        import random, string
+        from .models import Product
 
         created = 0
-        with transaction.atomic():
-            for _ in range(n):
-                sku = self._random_sku()
-                for _attempt in range(5):
-                    try:
-                        Product.objects.create(
-                            name=f"Produto {sku}",
-                            sku=sku,
-                            description="Produto de demonstração para catálogo.",
-                            price_cents=random.randint(1_000, 99_999),
-                            stock=random.randint(0, 99),
-                            created_at=timezone.now(),
-                        )
-                        created += 1
-                        break
-                    except IntegrityError:
-                        sku = self._random_sku()
-
-        return Response({"created": created}, status=status.HTTP_201_CREATED)
-
-    @staticmethod
-    def _random_sku(length: int = 8) -> str:
-        chars = string.ascii_uppercase + string.digits
-        return "SKU-" + "".join(random.choices(chars, k=length))
+        for _ in range(12):
+            sku = "SKU-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+            Product.objects.create(
+                name=f"Produto {sku}",
+                sku=sku,
+                description="",
+                price_cents=random.choice([5990, 9900, 12990, 19990, 29990]),
+                stock=random.randint(0, 50),
+                image_url=f"https://picsum.photos/seed/{sku}/600/600",
+            )
+            created += 1
+        return Response({"created": created})
 
 
+# -------------------------
+# Fornecedores (CRUD)
+# -------------------------
+class SupplierViewSet(viewsets.ModelViewSet):
+    serializer_class = SupplierSerializer
+    queryset = Supplier.objects.all().order_by("name")
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "email", "contact_person", "phone"]
+    ordering_fields = ["name", "created_at", "updated_at"]
 
 
+# -------------------------
+# Pedidos (CRUD)
+# -------------------------
+class OrderViewSet(viewsets.ModelViewSet):
+    """
+    POST -> OrderCreateSerializer (escrita)
+    GET/PUT/PATCH -> OrderReadSerializer (leitura)
+    """
+    queryset = (
+        Order.objects.all()
+        .prefetch_related("items__product")
+        .order_by("-created_at")
+    )
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ["created_at", "total_price_cents", "status"]
 
-
-
-
-
-
-
+    def get_serializer_class(self):
+        if self.action in ("create",):
+            return OrderCreateSerializer
+        return OrderReadSerializer
