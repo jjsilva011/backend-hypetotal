@@ -1,4 +1,4 @@
-# api/views.py — Category com annotate(product_count) + Product filtros + Order read/write seguro
+# api/views.py — Category com annotate(product_count) + Products filtros + Orders read/write
 
 from django.db.models import Count
 from rest_framework import viewsets, filters, status
@@ -23,7 +23,6 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = CategorySerializer
 
     def get_queryset(self):
-        # requer related_name="products" no FK Product.category (se não, troque para "product_set")
         rel = "products"
         try:
             Category._meta.get_field("products")  # type: ignore[attr-defined]
@@ -49,7 +48,6 @@ class ProductViewSet(viewsets.ModelViewSet):
         category_id  = qp.get("category_id")
         category     = qp.get("category")
         category_slug= qp.get("category_slug")
-
         if category_id or category:
             qs = qs.filter(category_id=category_id or category)
         if category_slug:
@@ -58,13 +56,9 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"])
     def seed(self, request):
-        """
-        Cria produtos fake (respeita ENABLE_SEED ou DEBUG).
-        """
         from django.conf import settings
         if not (getattr(settings, "ENABLE_SEED", False) or settings.DEBUG):
             return Response({"detail": "Seed desabilitado."}, status=403)
-
         import random, string
         created = 0
         for _ in range(12):
@@ -92,7 +86,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
     ordering_fields = ["name", "created_at", "updated_at"]
 
 # -------------------------
-# Pedidos (CRUD)
+# Pedidos (CRUD) — leitura e escrita separadas
 # -------------------------
 class OrderViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
@@ -103,11 +97,9 @@ class OrderViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.request.method in ("GET",):
             return OrderReadSerializer
-        # Para POST/PUT/PATCH usamos o de escrita
         return OrderCreateSerializer
 
     def list(self, request, *args, **kwargs):
-        # força serializer de leitura para evitar 500
         qs = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(qs)
         serializer = OrderReadSerializer(page or qs, many=True, context={"request": request})
@@ -121,7 +113,6 @@ class OrderViewSet(viewsets.ModelViewSet):
         return Response(data)
 
     def create(self, request, *args, **kwargs):
-        # escreve com serializer de criação e sempre responde com o de leitura
         serializer = OrderCreateSerializer(data=request.data, context={"request": request})
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -142,6 +133,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         obj = self.get_object()
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 
 
