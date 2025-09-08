@@ -1,4 +1,5 @@
-# api/serializers.py — produtos + pedido (WRITE/READ) com create() blindado contra 500
+# api/serializers.py — produtos + pedido com SERIALIZERS separados p/ escrita/leitura
+# Objetivo: POST /api/orders/ nunca estourar 500; sempre retornar 400 com mensagens claras.
 
 from django.db import transaction
 from rest_framework import serializers
@@ -13,7 +14,7 @@ from .models import (
 
 # --------- Categorias ---------
 class CategorySerializer(serializers.ModelSerializer):
-    # Usa annotate se vier, senão calcula .products.count()
+    # Em DBs sem annotate(product_count) evitamos AttributeError:
     product_count = serializers.SerializerMethodField()
 
     class Meta:
@@ -22,7 +23,7 @@ class CategorySerializer(serializers.ModelSerializer):
 
     def get_product_count(self, obj):
         try:
-            return getattr(obj, "product_count", None) or obj.products.count()
+            return int(getattr(obj, "product_count", 0) or 0)
         except Exception:
             return 0
 
@@ -83,9 +84,10 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
 
     def get_price_formatted(self, obj):
-        cents = int(obj.price_cents or 0)
-        reais = cents / 100.0
-        return f"R$ {reais:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        cents = int(getattr(obj, "price_cents", 0) or 0)
+        reais = cents // 100
+        cent = cents % 100
+        return f"R$ {reais:,},{cent:02d}".replace(",", "X").replace(".", ",").replace("X", ".")
 
     def get_primary_image_url(self, obj):
         try:
@@ -105,25 +107,24 @@ class SupplierSerializer(serializers.ModelSerializer):
 #  PEDIDO / ITENS (WRITE)
 # ===========================
 class OrderItemWriteSerializer(serializers.ModelSerializer):
-    # Recebemos product_id no payload e resolvemos para Product
-    product_id = serializers.PrimaryKeyRelatedField(
-        queryset=Product.objects.all(),
-        source="product",
-        write_only=True,
-    )
+    # recebemos product_id no payload
+    product_id = serializers.IntegerField(write_only=True)
 
     class Meta:
         model = OrderItem
-        fields = ("product_id", "quantity")  # price_cents é calculado no servidor
+        fields = ("id", "product_id", "quantity", "price_cents", "product")
+        read_only_fields = ("id", "price_cents", "product")
 
-    def validate_quantity(self, value):
+    def validate(self, attrs):
+        qty = attrs.get("quantity")
         try:
-            q = int(value)
+            qty = int(qty)
         except Exception:
-            raise serializers.ValidationError("Quantidade inválida.")
-        if q <= 0:
-            raise serializers.ValidationError("Quantidade deve ser ≥ 1.")
-        return q
+            raise serializers.ValidationError({"quantity": "Deve ser um inteiro ≥ 1"})
+        if qty < 1:
+            raise serializers.ValidationError({"quantity": "Deve ser ≥ 1"})
+        attrs["quantity"] = qty
+        return attrs
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
@@ -131,76 +132,78 @@ class OrderCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Order
-        fields = (
-            "id",
-            "customer_name",
-            "status",              # opcional; default do model = "pending"
-            "total_price_cents",   # read-only no create (será calculado)
-            "items",
-            "created_at",
-            "updated_at",
-        )
-    read_only_fields = ("id", "total_price_cents", "created_at", "updated_at")
-
-    def validate_items(self, value):
-        if not value:
-            raise serializers.ValidationError("Informe ao menos 1 item.")
-        return value
+        fields = ("id", "customer_name", "status", "total_price_cents", "items", "created_at", "updated_at")
+        read_only_fields = ("id", "status", "total_price_cents", "created_at", "updated_at")
 
     @transaction.atomic
     def create(self, validated_data):
         """
-        Criação transacional de Order + OrderItems.
-        - resolve product_id -> product (já feito pelo serializer filho)
-        - fixa price_cents no momento do pedido
-        - soma total_price_cents
-        - converte qualquer falha inesperada em 400 com mensagem legível (nada de 500)
+        Estratégia "blind-safe":
+        - Valida tudo antes de gravar.
+        - Converte e verifica product_id/quantity.
+        - Captura erros e transforma em 400 legíveis.
         """
-        try:
-            items_data = validated_data.pop("items", [])
-            if not items_data:
-                raise serializers.ValidationError({"items": "Obrigatório e não pode ser vazio."})
+        items_data = list(validated_data.pop("items", []))
+        if not items_data:
+            raise serializers.ValidationError({"items": "Obrigatório e não pode ser vazio."})
 
-            # cria o pedido (status default = pending, salvo se cliente mandar)
-            order = Order.objects.create(**validated_data)
+        customer_name = (validated_data.get("customer_name") or "").strip()
+        if not customer_name:
+            raise serializers.ValidationError({"customer_name": "Obrigatório."})
 
-            total_cents = 0
-            for idx, item in enumerate(items_data, start=1):
-                product = item.get("product")
-                if not isinstance(product, Product):
-                    raise serializers.ValidationError({
-                        "items": {idx - 1: {"product_id": "Produto inválido ou inexistente."}}
-                    })
+        # 1) Resolver itens (sem gravar nada ainda)
+        resolved = []
+        total = 0
 
-                qty = int(item.get("quantity") or 1)
-                if qty <= 0:
-                    raise serializers.ValidationError({
-                        "items": {idx - 1: {"quantity": "Quantidade deve ser ≥ 1."}}
-                    })
+        # Import local para evitar ciclos em ambientes onde import na carga do módulo dá pau
+        from .models import Product, OrderItem  # noqa
 
-                price_cents = int(product.price_cents or 0)
+        for idx, item in enumerate(items_data, start=1):
+            # product_id
+            pid = item.get("product_id", None)
+            try:
+                pid_int = int(pid)
+            except Exception:
+                raise serializers.ValidationError({"items": [{ "index": idx, "product_id": "Inválido" }]})
 
-                OrderItem.objects.create(
-                    order=order,
-                    product=product,
-                    quantity=qty,
-                    price_cents=price_cents,
-                )
-                total_cents += price_cents * qty
+            try:
+                product = Product.objects.get(pk=pid_int)
+            except Product.DoesNotExist:
+                raise serializers.ValidationError({"items": [{ "index": idx, "product_id": f"Inexistente: {pid}" }]})
 
-            order.total_price_cents = total_cents
-            order.save(update_fields=["total_price_cents"])
-            return order
+            # quantity
+            qty = item.get("quantity", 0)
+            try:
+                qty = int(qty)
+            except Exception:
+                raise serializers.ValidationError({"items": [{ "index": idx, "quantity": "Inválido" }]})
+            if qty < 1:
+                raise serializers.ValidationError({"items": [{ "index": idx, "quantity": "Deve ser ≥ 1" }]})
 
-        except Product.DoesNotExist:
-            # não deve acontecer porque PKRelatedField já valida, mas sejamos explícitos
-            raise serializers.ValidationError({"items": "Produto informado não existe."})
-        except serializers.ValidationError:
-            # repassa validações amigáveis
-            raise
-        except Exception as e:
-            # último guarda-chuva: transforma 500 em 400 com mensagem
-            raise serializers.ValidationError({"detail": f"Falha ao criar pedido: {str(e)}"})
+            price = int(product.price_cents or 0)
+            resolved.append((product, qty, price))
+            total += price * qty
+
+        # 2) Persistir pedido e itens
+        order = Order.objects.create(
+            customer_name=customer_name,
+            status="pending",
+            total_price_cents=0,  # atualizaremos depois
+        )
+
+        OrderItem.objects.bulk_create([
+            OrderItem(order=order, product=p, quantity=q, price_cents=pc)
+            for (p, q, pc) in resolved
+        ])
+
+        # Atualiza total por UPDATE (menos chance de race condition)
+        Order.objects.filter(pk=order.pk).update(total_price_cents=total)
+        order.refresh_from_db()
+        return order
+
+    def to_representation(self, instance):
+        # Após criar, devolvemos o formato de leitura completo (com itens + product)
+        return OrderReadSerializer(instance, context=self.context).data
 
 
 # ===========================
@@ -232,9 +235,11 @@ class OrderReadSerializer(serializers.ModelSerializer):
         )
 
     def get_total_price_formatted(self, obj):
-        cents = int(obj.total_price_cents or 0)
-        reais = cents / 100.0
-        return f"R$ {reais:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        cents = int(getattr(obj, "total_price_cents", 0) or 0)
+        reais = cents // 100
+        cent = cents % 100
+        return f"R$ {reais:,},{cent:02d}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 
 
 
