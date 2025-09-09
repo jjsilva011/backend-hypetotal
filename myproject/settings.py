@@ -34,21 +34,20 @@ if RENDER_EXTERNAL_HOSTNAME:
 # Apps
 # -------------------------
 INSTALLED_APPS = [
+    # Django…
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
-    # Desativa o staticfiles embutido do runserver para o WhiteNoise assumir no dev
-    "whitenoise.runserver_nostatic",
     "django.contrib.staticfiles",
 
-    # terceiros
+    # Terceiros
     "rest_framework",
     "django_filters",
     "corsheaders",
 
-    # app local (usa AppConfig para carregar signals.py)
+    # O app da API (use a classe, não "api.apps" e nem só "api")
     "api.apps.ApiConfig",
 ]
 
@@ -56,10 +55,9 @@ INSTALLED_APPS = [
 # Middlewares
 # -------------------------
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",          # antes de CommonMiddleware
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",     # WhiteNoise logo após Security
-    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",  # precisa para /cart/
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -72,18 +70,15 @@ ROOT_URLCONF = "myproject.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        # Necessário para localizar templates de emails (templates/emails/*)
-        "DIRS": [BASE_DIR / "templates"],
+        "DIRS": [BASE_DIR / "templates"],  # já criamos templates/emails/*
         "APP_DIRS": True,
-        "OPTIONS": {
-            "context_processors": [
-                "django.template.context_processors.debug",
-                "django.template.context_processors.request",
-                "django.contrib.auth.context_processors.auth",
-                "django.contrib.messages.context_processors.messages",
-            ],
-        },
-    },
+        "OPTIONS": { "context_processors": [
+            "django.template.context_processors.debug",
+            "django.template.context_processors.request",
+            "django.contrib.auth.context_processors.auth",
+            "django.contrib.messages.context_processors.messages",
+        ]},
+    }
 ]
 
 WSGI_APPLICATION = "myproject.wsgi.application"
