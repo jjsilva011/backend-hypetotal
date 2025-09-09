@@ -1,7 +1,7 @@
-# api/urls.py — robusto: ping, categories fallback, cart & MP tolerantes, orders.safe
+# api/urls.py — robusto: ping, categories fallback, cart & MP tolerantes, orders.safe, playground
 
 from django.urls import path, include
-from django.http import JsonResponse, HttpRequest
+from django.http import JsonResponse, HttpRequest, HttpResponse
 from rest_framework.routers import DefaultRouter
 
 def health(_request):
@@ -51,6 +51,92 @@ try:
 except Exception as e:
     CategorySerializer = None
     serializers_err = e
+
+
+# ----------------- Playground (inline fallback) -----------------
+def _playground_inline(_request):
+    html = """<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <title>HypeTotal API Playground</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px }
+    input, button, select { font: inherit; padding:8px 10px; }
+    pre { background:#0b1020; color:#e6eefc; padding:12px; border-radius:8px; overflow:auto; }
+    small { color:#666 }
+  </style>
+</head>
+<body>
+  <h1>HypeTotal API Playground</h1>
+  <p><small>Esta página é servida diretamente do <code>api/urls.py</code> (fallback inline). Se você criar <code>views.playground</code>, ela passa a usar a sua versão automaticamente.</small></p>
+
+  <div class="row">
+    <button onclick="go('GET','/api/')"           >GET /api/</button>
+    <button onclick="go('GET','/api/health/')"    >GET /api/health/</button>
+    <button onclick="go('GET','/api/categories/')">GET /api/categories/</button>
+    <button onclick="go('GET','/api/cart/')"      >GET /api/cart/</button>
+    <button onclick="go('GET','/api/orders/?per_page=3')">GET /api/orders/?per_page=3</button>
+  </div>
+
+  <h3>Carrinho</h3>
+  <div class="row">
+    <input id="pid" type="number" placeholder="product_id (ex. 31)" />
+    <input id="qty" type="number" placeholder="quantity" value="1" />
+    <button onclick="cartAdd()">POST /api/cart/add/</button>
+    <button onclick="cartUpd()">POST /api/cart/update/</button>
+    <button onclick="go('POST','/api/cart/clear/')">POST /api/cart/clear/</button>
+  </div>
+
+  <h3>Checkout PIX (modo teste)</h3>
+  <div class="row">
+    <button onclick="go('POST','/api/checkout/pix/', {customer:{name:'Cliente Demo',email:'cliente@exemplo.com'}, test_status:'approved'})">
+      POST /api/checkout/pix/ (test_status=approved)
+    </button>
+  </div>
+
+  <h3>Resultado</h3>
+  <pre id="out">Clique em um botão…</pre>
+
+  <script>
+    async function go(method, url, body){
+      const out = document.getElementById('out');
+      out.textContent = 'Carregando…';
+      try {
+        const opt = { method, headers: {} , credentials: 'include' };
+        if (body !== undefined) {
+          opt.headers['Content-Type'] = 'application/json';
+          opt.body = JSON.stringify(body);
+        }
+        const res = await fetch(url, opt);
+        const txt = await res.text();
+        out.textContent = 'HTTP ' + res.status + '\\n\\n' + txt;
+      } catch (e) {
+        out.textContent = 'Erro: ' + e;
+      }
+    }
+    function cartAdd(){
+      const pid = parseInt(document.getElementById('pid').value || '0', 10);
+      const qty = parseInt(document.getElementById('qty').value || '1', 10);
+      go('POST','/api/cart/add/', { product_id: pid, quantity: qty });
+    }
+    function cartUpd(){
+      const pid = parseInt(document.getElementById('pid').value || '0', 10);
+      const qty = parseInt(document.getElementById('qty').value || '1', 10);
+      go('POST','/api/cart/update/', { product_id: pid, quantity: qty });
+    }
+  </script>
+</body>
+</html>"""
+    return HttpResponse(html)
+
+try:
+    # se existir um playground em views.py, usa ele; senão cai no inline acima
+    from .views import playground as playground_view
+except Exception:
+    playground_view = _playground_inline
 
 
 # ----------------- DRF Router (quando der) -----------------
@@ -199,6 +285,10 @@ urlpatterns = [
     # ping para provar que ESTE arquivo está ativo
     path("urls-ping/", urls_ping),
 
+    # Playground (com e sem barra)
+    path("playground",  playground_view, name="api-playground-no-slash"),
+    path("playground/", playground_view, name="api-playground"),
+
     # Fallback categories SEM depender do router
     path("categories/", categories_list_fallback, name="categories-fallback"),
 
@@ -215,20 +305,23 @@ urlpatterns = [
     path("customers/<int:pk>/",     (cust_views.customer_detail   if cust_views else _stub(f"customer_views: {cust_views_err}")), name="customer-detail"),
 
     # Mercado Pago
-    path("checkout/pix/",            checkout_pix,      name="checkout-pix"),
-    path("payments/mp/webhook/",     mp_webhook,        name="mp-webhook"),
-    path("payments/mp/public_key/",  mp_public_key,     name="mp-public-key"),
-    path("payments/mp/card/",        mp_card_pay,       name="mp-card-pay"),
-    path("payments/mp/issuers/",     mp_card_issuers,   name="mp-card-issuers"),
-    path("payments/mp/installments/",mp_installments,   name="mp-installments"),
+    path("checkout/pix/",             checkout_pix,      name="checkout-pix"),
+    path("payments/mp/webhook/",      mp_webhook,        name="mp-webhook"),
+    path("payments/mp/public_key/",   mp_public_key,     name="mp-public-key"),
+    path("payments/mp/card/",         mp_card_pay,       name="mp-card-pay"),
+    path("payments/mp/issuers/",      mp_card_issuers,   name="mp-card-issuers"),
+    path("payments/mp/installments/", mp_installments,   name="mp-installments"),
 
     # Lista/Criação segura de pedidos (não conflita com /orders/ do router)
-    path("orders.safe/", orders_list_safe, name="orders-list-safe"),
-    path("orders.safe/create", orders_create_safe, name="orders-create-safe"),
+    path("orders.safe/",        orders_list_safe,   name="orders-list-safe"),
+    path("orders.safe/create",  orders_create_safe, name="orders-create-safe-no-slash"),
+    path("orders.safe/create/", orders_create_safe, name="orders-create-safe"),
 
     # Router por último (se CategoryViewSet carregar, /categories/ do router também existirá)
     path("", include(router.urls)),
 ]
+
+
 
 
 
